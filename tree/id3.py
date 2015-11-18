@@ -40,14 +40,19 @@ class ID3(object):
 
     ret = Node.make_node(y[record_indexes], entropy=H, is_leave=False)
     info_gain = {}
+    column_entropy = {}
+    gain_ratio = {}
     for col in column_candidates:
       split_indexes = self.split(X, record_indexes, col)
       cur_H = 0
       for index in split_indexes:
         cur_H += len(index) * 1.0 / len(record_indexes) * ID3.entropy(y[index])
       info_gain[col] = H - cur_H
+      column_entropy[col] = ID3.entropy(X[record_indexes, col])
+      gain_ratio[col] = 0 if column_entropy[col] == 0 else \
+                        info_gain[col] / column_entropy[col]
 
-    col, gain = sorted(info_gain.items(), key=lambda t: -t[1])[0]
+    col, gain = sorted(gain_ratio.items(), key=lambda t: -t[1])[0]
     split_indexes = self.split(X, record_indexes, col)
     ret.children = {}
     ret.split_column = col
