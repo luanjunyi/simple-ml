@@ -1,6 +1,7 @@
 import numpy as np
 import pdb
 from scipy.optimize import fmin_l_bfgs_b
+import scipy.sparse as sps
 
 class LogisticRegression(object):
   """
@@ -13,33 +14,30 @@ class LogisticRegression(object):
       Inverse of regularization strength; must be a positive float.
       Like in support vector machines, smaller values specify stronger
       regularization.
-
-  solver : str, 'lbfgs' or 'sgd' (default = 'lbfgs')
-      fmin_l_bfgs_b from scipy is used to for lbfgs
-      TODO: If solver is sgd, the argument X passed to fix can be a generator.
-
-  sgd_epoch : int, optional (default = 10)
-      The number of epoch used for sgd solver
   """
   def __init__(self,
                C = 1.0, #Inverse of regularization strength; must be a positive float. Like in support vector machines, smaller values specify stronger regularization.
-               solver='lbfgs',
+               solver='gradient_descend',
+               learning_rate=1.0,
                sgd_epoch = 20):
     self.C_ = C
     self.solver_ = solver
     self.w_ = None
     self.sgd_epoch_ = sgd_epoch
+    self.learning_rate_ = learning_rate
+    self.tol_ = 0.0001
 
   # We'll present as minimization problem here since fmin_l_bfgs_b always minimizes
   def fit(self, X, y):
     self.labels = np.unique(y)
     assert len(self.labels) == 2
     y = np.where(y == self.labels[0], 0, 1)
+    y = y.reshape(-1, 1)
 
-    if self.solver_ == 'lbfgs':
-      self.w_ = self.solve_by_lbfgs(X, y)
-    elif self.solver_ == 'sgd':
-      self.w_ = self.solve_by_sgd(X, y)
+    if self.solver_ == 'sgd':
+      self.solve_by_sgd(X, y)
+    elif self.solver_ == 'gradient_descend':
+      self.solve_by_gradient_descend(X, y)
     else:
       raise Exception("unsupported solver: %s" % self.solver_)
 
@@ -47,74 +45,97 @@ class LogisticRegression(object):
   # X yet
   def predict(self, X):
     n, m = X.shape
-    X = np.c_[X, [1] * n]
-    p = self.predict_with(self.w_, X)
+    p = self.predict_proba(X)
     return np.where( p >= 0.5, self.labels[1], self.labels[0])
 
-  def predict_prob(self, X):
+  def predict_proba(self, X):
+    return self.predict_with(self.w_, self.b_, X)
+
+  def solve_by_gradient_descend(self, X, y):
+    #pdb.set_trace()
     n, m = X.shape
-    X = np.c_[X, [1] * n]
-    p = self.predict_with(self.w_, X)
-    return p
+    self.w_ = np.zeros(m).reshape(-1, 1)
+    self.b_ = 0
+    epoch = 0
+
+    while True:
+      p = self.predict_proba(X)
+      c = self.cost_func(self.w_, self.b_, p, y)
+      print "cost: %f" % c
+      dw, db = self.derivative(self.w_, self.b_, X, y)
+      if epoch > 0:
+        print "epoch: %d, cost: %f, diff: %f" % (epoch, c, prev_cost - c)
+        if prev_cost - c < self.tol_:
+          break
+
+      self.w_ -= dw * self.learning_rate_
+      self.b_ -= db * self.learning_rate_
+      prev_cost = c
+      epoch += 1
 
  # [1, 1, ..., 1] has been appended to X
-  def predict_with(self, w, X):
-    prod = np.dot(X, w)
+  def predict_with(self, w, b, X):
+    dot = np.dot if not sps.issparse(X) else sps.csr_matrix.dot
+    prod = dot(X, w) + b
     p = 1.0 / (1 + np.exp(-prod))
+    # print 'prod : ', prod
     return p
 
   # The minus of log likelyhood of y given X, parametered by w
-  def target_func(self, w, X, y):
-    regularization = 1.0 / self.C_ * sum(w ** 2)
-    prod = np.dot(X, w)
-    p = 1.0 / (1 + np.exp(-prod))
+  def cost_func(self, w, b, p, y):
+    n = len(y)
     p_eq = (p ** y) * ((1-p) ** (1-y))
-    log_prob = sum(np.log(p_eq))
+    p_eq = np.where(p_eq == 0, 0.000001, p_eq)
+    p_eq = np.where(p_eq == 1, 0.999999, p_eq)
+    log_prob = sum(np.log(p_eq)) / n
+
+    regularization = (sum(w ** 2) + b ** 2) / (2 * n * self.C_)
+    print "loss: %f, regu: %f" % (-log_prob, regularization)
     ret = -log_prob + regularization
     # print "target: %.5f" % ret
     return ret
 
   # The partial deriviative of log likelyhood on w.
-  def derivative(self, w, X, y):
-    p = self.predict_with(w, X)
-    d = np.sum(X * (p - y)[:, np.newaxis], axis = 0) - 2.0 / self.C_ * w
-    return d
-
-  def solve_by_lbfgs(self, X, y):
+  def derivative(self, w, b, X, y):
+    #pdb.set_trace()
+    p = self.predict_with(w, b, X)
     n, m = X.shape
-    X = np.c_[X, [1] * n]
-    n, m = X.shape
-    w, _1, _2 = fmin_l_bfgs_b(self.fmin_l_bfgs_b_adapt(self.target_func),
-                            fprime = self.fmin_l_bfgs_b_adapt(self.derivative),
-                            x0 = np.array([0] * m),
-                            args = (X, y))
-    return w
+    if sps.issparse(X):
+      t = sps.diags((p - y).flatten(), 0)
+    else:
+      t = (p - y)
+    dw = ((t * X).sum(axis = 0) / n).reshape(-1, 1) + w / (self.C_ * n)
+    db = np.sum(p - y) / n + b / (self.C_ * n)
+    return dw, db
 
   # Technically, we are performing stachastic gradient ascend rather than descend,
   # but SGD is a far more common term
   def solve_by_sgd(self, X, y):
     n, m = X.shape
-    X = np.c_[X, [1] * n]
-    n, m = X.shape
-    w = np.zeros(m)
-    a0 = 0.1
-    t = 0
+    self.w_ = np.zeros(m).reshape(-1, 1)
+    self.b_ = 0
+    epoch = 0
+    a0 = self.learning_rate_
     for epoch in xrange(self.sgd_epoch_):
+      cost = 0
       for i in xrange(n):
         xi = X[i]
-        yi = y[i]
-        pi = self.predict_with(w, xi)
-        alpha = a0 / (1 + 1.0 / self.C_ * a0 * t)
-        delta = np.multiply(alpha, (yi - pi)) * xi
-        w = w + delta
-    return w
-
-  def fmin_l_bfgs_b_adapt(self, func):
-    def procedure(params, *args):
-      X, y = args
-      w = params
-      return func(w, X, y)
-    return procedure
+        yi = y[i][0]
+        #pdb.set_trace()
+        pi = self.predict_with(self.w_, self.b_, xi)[0]
+        if pi == 1:
+          pi = 0.99999
+        if pi == 0:
+          pi = 0.00001
+        alpha = a0 / (1 + epoch / a0)
+        d = np.multiply(alpha, (yi - pi))
+        dw = np.multiply(alpha, self.w_ / self.C_) # regularization
+        self.w_ += (d * xi).reshape(-1, 1) - dw
+        self.b_ += d
+        cost += -(yi * np.log(pi) + (1 - yi) * np.log(1 - pi)) / n + \
+                (np.sum(self.w_ ** 2) + self.b_ ** 2) / (2.0 * self.C_ * (n ** 2))
+      print 'epoch %d, cost: %f' % (epoch, cost)
+        
 
 if __name__ == "__main__":
   X = np.array(
@@ -129,6 +150,7 @@ if __name__ == "__main__":
        [-8, -100],
        [-5, -30],
        [9,7]])
+  #X = sps.csr_matrix(X)
   y = np.array([1, 1, 1, 1, 1, 0, 0, 0, 0, 0])
 
   from sklearn.preprocessing import scale
@@ -137,10 +159,13 @@ if __name__ == "__main__":
   scaler = Normalizer()
   X = scaler.fit_transform(X.astype(float))
   
-  lr = LogisticRegression(C = 1, solver = 'sgd')
+  lr = LogisticRegression(C = 10,
+                          learning_rate = 0.5,
+                          solver = 'sgd',
+                          sgd_epoch = 5000)
   lr.fit(X, y)
   print lr.w_
-  pred = lr.predict_prob(X)
+  pred = lr.predict_proba(X)
   print " ".join(["%.2f" % p for p in pred])
 
   X_test = np.array(
@@ -156,5 +181,5 @@ if __name__ == "__main__":
      [-50, -59],
      [89,40]])
   X_test = scaler.transform(X_test.astype(float))
-  print " ".join(["%.2f" % p for p in lr.predict_prob(X_test)])
+  print " ".join(["%.2f" % p for p in lr.predict_proba(X_test)])
        
