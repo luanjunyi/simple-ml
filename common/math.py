@@ -29,7 +29,7 @@ def softmax(z):
 def softmax_cross_entropy_loss(y, p):
     """
     y is the true labels of length n
-    p is n x m with p[i, j] the value before softmax that row[i] is label[j]
+    p is n x m with p[i, j] the score before softmax that row[i] is label[j]
 
     First apply softmax on p, then return the cross entropy loss and the derivatives
     of the loss wrt p
