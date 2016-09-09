@@ -11,4 +11,5 @@ Hopefully, this repo will become your go-to toolkit when investigating new datas
 
 # Supported Models
 * Logistic Regression
-* Linear chain Conditional Random Field(CRF), working in progress
+* Two Layer Neural Network
+* ID3(decision tree)
