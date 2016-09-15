@@ -20,35 +20,58 @@ class LogisticRegression(object):
     """
     def __init__(self,
                  C = 1.0,
-                 solver='gradient_descend',
                  learning_rate=1.0,
                  tol = 1e-4,
+                 labels = [],
                  verbose = False,
-                 sgd_epoch = 20):
+                 print_every = 100):
         self.C_ = C
-        self.solver_ = solver
-        self.w_ = None
-        self.sgd_epoch_ = sgd_epoch
         self.learning_rate_ = learning_rate
         self.verbose_ = verbose
         self.tol_ = tol
         self.y_dict = {}
-        self.y_labels = []
+        self.y_labels = labels
+        self.init_done = False
+        self.print_every = print_every
 
-    # We'll present as minimization problem here since fmin_l_bfgs_b always minimizes
     def fit(self, X, y):
-        y = self.translate_y(y)
-        if self.solver_ == 'sgd':
-            self.solve_by_sgd(X, y)
-        elif self.solver_ == 'gradient_descend':
-            self.solve_by_gradient_descend(X, y)
-        else:
-            raise Exception("unsupported solver: %s" % self.solver_)
+        self.init(X, y)
+        self.solve_by_gradient_descent(X, y)
 
-    def translate_y(self, y):
-        self.y_labels = np.unique(y)
+    def partial_fit(self, X, y):
+        if not self.init_done:
+            self.init(X, y)
+        y = self.translate_y(y)
+        n, _ = X.shape
+        loss, grad = self.loss(self.w_, self.b_, X, y)
+        loss /= n
+        grad /= n
+
+        loss_reg, grad_reg_w = self.regularization(self.w_, n)
+        loss = self.C_ * loss + loss_reg
+
+        dw = self.C_ * dot(X.T, grad) + grad_reg_w
+        db = np.sum(grad, axis = 0)
+
+        self.w_ -= dw * self.learning_rate_
+        self.b_ -= db * self.learning_rate_
+        return loss
+
+    def init(self, X, y):
+        self.load_labels(y)
+        _, d = X.shape
+        m = len(self.y_labels)
+        self.w_ = np.zeros([d, m])
+        self.b_ = np.zeros(m)
+        self.init_done = True
+
+    def load_labels(self, y):
+        if len(self.y_labels) == 0:
+            self.y_labels = np.unique(y)
         assert len(self.y_labels) >= 2, "unique values of y is less than 2"
         self.y_dict = {v:i for i, v in enumerate(self.y_labels)}
+
+    def translate_y(self, y):
         return np.array([self.y_dict[v] for v in y]).reshape(-1, 1)
 
     def loss(self, w, b, X, y):
@@ -64,32 +87,18 @@ class LogisticRegression(object):
         grad = w / n
         return loss, grad
 
-    def solve_by_gradient_descend(self, X, y):
-        n, d = X.shape
-        m = len(self.y_labels)
-        self.w_ = np.zeros([d, m])
-        self.b_ = np.zeros(m)
+    def solve_by_gradient_descent(self, X, y):
+        n, _ = X.shape
         epoch = 0
 
         while True:
-            loss, grad = self.loss(self.w_, self.b_, X, y)
-            loss /= n
-            grad /= n
-
-            loss_reg, grad_reg_w = self.regularization(self.w_, X.shape[0])
-            loss = self.C_ * loss + loss_reg
-
-            dw = self.C_ * dot(X.T, grad) + grad_reg_w
-            db = np.sum(grad, axis = 0)
-
+            loss = self.partial_fit(X, y)
             if epoch > 0:
-                if self.verbose_:
-                    print "epoch: %d, cost: %f, diff: %f" % (epoch, loss, prev_loss - loss)
+                if self.verbose_ and epoch % self.print_every == 0:
+                    print "epoch: %d, loss: %f, diff: %f" % (epoch, loss, prev_loss - loss)
+                assert loss <= prev_loss
                 if prev_loss - loss < self.tol_:
                     break
-                    prev_loss = loss
-            self.w_ -= dw * self.learning_rate_
-            self.b_ -= db * self.learning_rate_
             prev_loss = loss
             epoch += 1
 
@@ -99,7 +108,8 @@ class LogisticRegression(object):
 
     def predict(self, X):
         p = self.predict_proba(X)
-        return np.argmax(p, axis = 0)
+        ret = np.argmax(p, axis = 1)
+        return np.array([self.y_labels[idx] for idx in ret])
 
 if __name__ == "__main__":
     X = np.array(
@@ -123,11 +133,21 @@ if __name__ == "__main__":
     scaler = Normalizer()
     X = scaler.fit_transform(X.astype(float))
   
-    lr = LogisticRegression(C = 10,
+    lr = LogisticRegression(C = 50,
                             learning_rate = 0.5,
-                            solver = 'gradient_descend',
-                            sgd_epoch = 5000)
-    lr.fit(X, y)
+                            verbose = True,
+                            labels = [0, 1])
+    
+    # Test SGD
+    idx = range(len(X))
+    import random
+    for _ in xrange(100):
+        random.shuffle(idx)
+        loss = lr.partial_fit(X[idx[:4], :], y[idx[:4]])
+        print loss
+
+    #lr.fit(X, y)
+
     print lr.w_
     pred = lr.predict_proba(X)[:, 1]
     print " ".join(["%.2f" % p for p in pred])
